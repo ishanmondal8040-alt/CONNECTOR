@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CONNECTOR Socket Test</title>
+</head>
+<body>
+
+<h1>Socket.IO Test</h1>
+
+<input
+  type="text"
+  id="token"
+  placeholder="Paste JWT Token"
+  style="width:700px"
+/>
+
+<button id="connectBtn">Connect</button>
+
+<p id="status">Not connected</p>
+
+<h2>Online Users</h2>
+<pre id="users"></pre>
+
+<h2>Received Messages (message:receive)</h2>
+<pre id="messages">No messages received yet.</pre>
+
+<h2>Send Message Test</h2>
+<input
+  type="text"
+  id="sendReceiverId"
+  placeholder="Receiver User ID"
+  style="width:400px"
+/>
+<br />
+<input
+  type="text"
+  id="sendContent"
+  placeholder="Message content"
+  style="width:400px"
+/>
+<br />
+<button id="sendMessageBtn">Send Message</button>
+
+<h2>Typing Indicator Test</h2>
+<input
+  type="text"
+  id="receiverId"
+  placeholder="Receiver User ID"
+  style="width:400px"
+/>
+<button id="startTypingBtn">Start Typing</button>
+<button id="stopTypingBtn">Stop Typing</button>
+
+<h3>Incoming Typing Events (typing:receive)</h3>
+<pre id="typingStatus">No typing events received yet.</pre>
+
+<h2>Seen Status Events</h2>
+<ul id="seenEvents">
+  <li>No seen events received yet.</li>
+</ul>
+
+<h2>Delivered Status Events</h2>
+<ul id="deliveredEvents">
+  <li>No delivered events received yet.</li>
+</ul>
+
+<script src="http://localhost:5000/socket.io/socket.io.js"></script>
+
+<script>
+const connectBtn = document.getElementById("connectBtn");
+const tokenInput = document.getElementById("token");
+const statusElement = document.getElementById("status");
+const usersElement = document.getElementById("users");
+const messagesElement = document.getElementById("messages");
+const sendReceiverIdInput = document.getElementById("sendReceiverId");
+const sendContentInput = document.getElementById("sendContent");
+const sendMessageBtn = document.getElementById("sendMessageBtn");
+const receiverIdInput = document.getElementById("receiverId");
+const startTypingBtn = document.getElementById("startTypingBtn");
+const stopTypingBtn = document.getElementById("stopTypingBtn");
+const typingStatusElement = document.getElementById("typingStatus");
+const seenEventsElement = document.getElementById("seenEvents");
+const deliveredEventsElement = document.getElementById("deliveredEvents");
+
+let socket = null;
+let isConnecting = false;
+let receivedMessages = [];
+let seenEvents = [];
+let deliveredEvents = [];
+
+function setStatus(text) {
+  statusElement.innerText = text;
+}
+
+function renderMessages() {
+  messagesElement.innerText = JSON.stringify(receivedMessages, null, 2);
+}
+
+function renderSeenEvents() {
+  if (seenEvents.length === 0) {
+    seenEventsElement.innerHTML = "<li>No seen events received yet.</li>";
+    return;
+  }
+
+  seenEventsElement.innerHTML = seenEvents
+    .map(
+      (event) =>
+        `<li>User ${event.readerId} saw your messages at ${event.formattedReadAt}</li>`
+    )
+    .join("");
+}
+
+function renderDeliveredEvents() {
+  if (deliveredEvents.length === 0) {
+    deliveredEventsElement.innerHTML = "<li>No delivered events received yet.</li>";
+    return;
+  }
+
+  deliveredEventsElement.innerHTML = deliveredEvents
+    .map(
+      (event) =>
+        `<li>Message ${event.messageId} delivered at ${event.formattedDeliveredAt}</li>`
+    )
+    .join("");
+}
+
+connectBtn.addEventListener("click", () => {
+
+  if (typeof io === "undefined") {
+    setStatus(
+      "Socket.IO client failed to load from http://localhost:5000/socket.io/socket.io.js — is the backend running on port 5000?"
+    );
+    return;
+  }
+
+  if (isConnecting) {
+    return;
+  }
+
+  if (socket) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+  }
+
+  const token = tokenInput.value.trim();
+
+  if (!token) {
+    setStatus("Please paste a JWT token first.");
+    return;
+  }
+
+  isConnecting = true;
+  connectBtn.disabled = true;
+  setStatus("Connecting...");
+
+  socket = io("http://localhost:5000", {
+    auth: {
+      token: token,
+    },
+    reconnection: false,
+  });
+
+  socket.on("connect", () => {
+    isConnecting = false;
+    connectBtn.disabled = false;
+    setStatus("Connected : " + socket.id);
+  });
+
+  socket.on("online-users", (users) => {
+    usersElement.innerText = JSON.stringify(users, null, 2);
+  });
+
+  socket.on("message:receive", (message) => {
+    receivedMessages.push(message);
+    renderMessages();
+  });
+
+  socket.on("typing:receive", ({ senderId, isTyping }) => {
+    typingStatusElement.innerText = isTyping
+      ? `User ${senderId} is typing...`
+      : `User ${senderId} stopped typing.`;
+  });
+
+  socket.on("message:seen", ({ readerId, readAt }) => {
+    seenEvents.push({
+      readerId,
+      formattedReadAt: new Date(readAt).toLocaleString(),
+    });
+    renderSeenEvents();
+  });
+
+  socket.on("message:delivered", ({ messageId, deliveredAt }) => {
+    deliveredEvents.push({
+      messageId,
+      formattedDeliveredAt: new Date(deliveredAt).toLocaleString(),
+    });
+    renderDeliveredEvents();
+  });
+
+  socket.on("disconnect", (reason) => {
+    isConnecting = false;
+    connectBtn.disabled = false;
+    setStatus("Disconnected : " + reason);
+  });
+
+  socket.on("connect_error", (err) => {
+    isConnecting = false;
+    connectBtn.disabled = false;
+    console.error(err);
+    setStatus("Connection Failed : " + err.message);
+  });
+
+});
+
+sendMessageBtn.addEventListener("click", async () => {
+  if (!socket || !socket.connected) {
+    alert("Connect first.");
+    return;
+  }
+
+  const receiverId = sendReceiverIdInput.value.trim();
+  const content = sendContentInput.value.trim();
+
+  if (!receiverId || !content) {
+    alert("Enter both a Receiver User ID and a message.");
+    return;
+  }
+
+  const token = tokenInput.value.trim();
+
+  try {
+    const response = await fetch("http://localhost:5000/api/messages/send", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ receiverId, content }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      alert(data.message || "Failed to send message.");
+      return;
+    }
+
+    alert("Message sent");
+    console.log(data);
+  } catch (error) {
+    alert(error.message || "Failed to send message.");
+  }
+});
+
+startTypingBtn.addEventListener("click", () => {
+  if (!socket || !socket.connected) {
+    alert("Connect first.");
+    return;
+  }
+
+  const receiverId = receiverIdInput.value.trim();
+
+  if (!receiverId) {
+    alert("Enter a Receiver User ID first.");
+    return;
+  }
+
+  socket.emit("typing:start", { receiverId });
+});
+
+stopTypingBtn.addEventListener("click", () => {
+  if (!socket || !socket.connected) {
+    alert("Connect first.");
+    return;
+  }
+
+  const receiverId = receiverIdInput.value.trim();
+
+  if (!receiverId) {
+    alert("Enter a Receiver User ID first.");
+    return;
+  }
+
+  socket.emit("typing:stop", { receiverId });
+});
+</script>
+
+</body>
+</html>
